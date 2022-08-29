@@ -5,8 +5,10 @@
 
 package org.jetbrains.kotlin.test.backend.ir
 
+import org.jetbrains.kotlin.backend.common.IrActualizer
 import org.jetbrains.kotlin.test.model.*
 import org.jetbrains.kotlin.test.services.TestServices
+import org.jetbrains.kotlin.test.services.dependencyProvider
 
 class JvmIrKLibBackendFacade(
     val testServices: TestServices,
@@ -25,6 +27,14 @@ class JvmIrKLibBackendFacade(
         require(inputArtifact is KLibArtifact.JvmIrKLibArtifact) {
             "JvmIrKLibBackendFacade expects KLibArtifact.JvmIrKLibArtifact as input"
         }
+
+        val dependencyProvider = testServices.dependencyProvider
+        val dependencies = module.dependsOnDependencies.map { dependency ->
+            val testModule = dependencyProvider.getTestModule(dependency.moduleName)
+            val artifact = dependencyProvider.getArtifact(testModule, KLibKinds.KLib)
+            artifact.irModuleFragment
+        }
+        IrActualizer.actualize(inputArtifact.irModuleFragment, dependencies)
 
         return jvmFacadeHelper.transform(
             inputArtifact.state,

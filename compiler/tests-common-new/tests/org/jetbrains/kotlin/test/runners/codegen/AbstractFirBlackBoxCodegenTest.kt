@@ -9,6 +9,7 @@ import org.jetbrains.kotlin.test.Constructor
 import org.jetbrains.kotlin.test.TargetBackend
 import org.jetbrains.kotlin.test.backend.ir.*
 import org.jetbrains.kotlin.test.builders.*
+import org.jetbrains.kotlin.test.directives.ConfigurationDirectives.USE_IR_ACTUALIZER
 import org.jetbrains.kotlin.test.directives.JvmEnvironmentConfigurationDirectives.USE_PSI_CLASS_FILES_READING
 import org.jetbrains.kotlin.test.directives.ConfigurationDirectives.WITH_STDLIB
 import org.jetbrains.kotlin.test.directives.LanguageSettingsDirectives
@@ -26,7 +27,7 @@ open class AbstractFirBlackBoxCodegenTest : AbstractJvmBlackBoxCodegenTestBase<F
         FrontendKinds.FIR,
         TargetBackend.JVM_IR,
     ) {
-    private val useIrLinker: Boolean
+    private val useIrActualizer: Boolean
         get() = testInfo.className.contains("\$Multiplatform")
 
     override val frontendFacade: Constructor<FrontendFacade<FirOutputArtifact>>
@@ -45,7 +46,7 @@ open class AbstractFirBlackBoxCodegenTest : AbstractJvmBlackBoxCodegenTestBase<F
         get() = ::JvmIrKLibBackendFacade
 
     override fun TestConfigurationBuilder.configuration() {
-        if (!useIrLinker) {
+        if (!useIrActualizer) {
             commonConfigurationForCodegenTest(targetFrontend, frontendFacade, frontendToBackendConverter, backendFacade)
         } else {
             commonServicesConfigurationForCodegenTest(targetFrontend)
@@ -77,9 +78,9 @@ open class AbstractFirBlackBoxCodegenTest : AbstractJvmBlackBoxCodegenTestBase<F
                 }
             }
 
-            if (useIrLinker) {
+            if (useIrActualizer) {
                 defaultDirectives {
-                    +USE_IR_LINKER
+                    +USE_IR_ACTUALIZER
                 }
             }
 
