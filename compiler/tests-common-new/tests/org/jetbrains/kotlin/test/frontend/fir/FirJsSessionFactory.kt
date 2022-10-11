@@ -22,6 +22,10 @@ import org.jetbrains.kotlin.fir.session.FirAbstractSessionFactory
 import org.jetbrains.kotlin.fir.session.FirSessionConfigurator
 import org.jetbrains.kotlin.fir.session.KlibBasedSymbolProvider
 import org.jetbrains.kotlin.incremental.components.LookupTracker
+import org.jetbrains.kotlin.ir.backend.js.jsResolveLibraries
+import org.jetbrains.kotlin.ir.backend.js.resolverLogger
+import org.jetbrains.kotlin.js.config.JSConfigurationKeys
+import org.jetbrains.kotlin.library.resolver.KotlinResolvedLibrary
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.test.model.TestModule
 import org.jetbrains.kotlin.test.services.TestServices
@@ -52,6 +56,19 @@ object FirJsSessionFactory : FirAbstractSessionFactory() {
                     KlibBasedSymbolProvider(session, moduleDataProvider, kotlinScopeProvider, it)
                 }
             })
+    }
+
+    private fun resolveJsLibraries(
+        module: TestModule,
+        testServices: TestServices,
+        configuration: CompilerConfiguration
+    ): List<KotlinResolvedLibrary> {
+        val dependencyConfigurator = JsDependenciesConfigurator(module, testServices)
+        val (runtimeKlibsPaths, transitiveLibraries, friendLibraries) = dependencyConfigurator.getJsDependencies()
+        val paths = runtimeKlibsPaths + transitiveLibraries.map { it.path } + friendLibraries.map { it.path }
+        val repositories = configuration[JSConfigurationKeys.REPOSITORIES] ?: emptyList()
+        val logger = configuration.resolverLogger
+        return jsResolveLibraries(paths, repositories, logger).getFullResolvedList()
     }
 
     fun createModuleBasedSession(

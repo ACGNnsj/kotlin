@@ -15,21 +15,12 @@ import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
 import org.jetbrains.kotlin.cli.jvm.compiler.PsiBasedProjectFileSearchScope
 import org.jetbrains.kotlin.cli.jvm.compiler.TopDownAnalyzerFacadeForJVM
 import org.jetbrains.kotlin.cli.jvm.compiler.VfsBasedProjectEnvironment
-import org.jetbrains.kotlin.cli.jvm.config.jvmClasspathRoots
-import org.jetbrains.kotlin.cli.jvm.config.jvmModularRoots
-import org.jetbrains.kotlin.config.CompilerConfiguration
-import org.jetbrains.kotlin.config.JVMConfigurationKeys
 import org.jetbrains.kotlin.fir.*
-import org.jetbrains.kotlin.fir.FirAnalyzerFacade
 import org.jetbrains.kotlin.fir.checkers.registerExtendedCommonCheckers
 import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrar
-import org.jetbrains.kotlin.fir.session.FirSessionConfigurator
 import org.jetbrains.kotlin.fir.session.FirJvmSessionFactory
-import org.jetbrains.kotlin.ir.backend.js.jsResolveLibraries
-import org.jetbrains.kotlin.ir.backend.js.resolverLogger
-import org.jetbrains.kotlin.js.config.JSConfigurationKeys
+import org.jetbrains.kotlin.fir.session.FirSessionConfigurator
 import org.jetbrains.kotlin.js.resolve.JsPlatformAnalyzerServices
-import org.jetbrains.kotlin.library.resolver.KotlinResolvedLibrary
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.platform.TargetPlatform
 import org.jetbrains.kotlin.platform.isCommon
@@ -44,14 +35,10 @@ import org.jetbrains.kotlin.test.TargetBackend
 import org.jetbrains.kotlin.test.directives.ConfigurationDirectives.USE_IR_ACTUALIZER
 import org.jetbrains.kotlin.test.directives.FirDiagnosticsDirectives
 import org.jetbrains.kotlin.test.directives.model.DirectivesContainer
-import org.jetbrains.kotlin.test.model.DependencyRelation
 import org.jetbrains.kotlin.test.model.FrontendFacade
 import org.jetbrains.kotlin.test.model.FrontendKinds
 import org.jetbrains.kotlin.test.model.TestModule
 import org.jetbrains.kotlin.test.services.*
-import org.jetbrains.kotlin.test.services.configuration.JsEnvironmentConfigurator
-import java.io.File
-import java.nio.file.Paths
 
 class FirFrontendFacade(
     testServices: TestServices,
@@ -69,7 +56,7 @@ class FirFrontendFacade(
         get() = listOf(FirDiagnosticsDirectives)
 
     override fun analyze(module: TestModule): FirOutputArtifact {
-        val moduleInfoProvider = testServices.firModuleInfoProvider
+        //val moduleInfoProvider = testServices.firModuleInfoProvider
         val compilerConfigurationProvider = testServices.compilerConfigurationProvider
         // TODO: add configurable parser
 
@@ -86,7 +73,6 @@ class FirFrontendFacade(
 
         val moduleName = Name.identifier(module.name)
         val languageVersionSettings = module.languageVersionSettings
-        val analyzerServices = module.targetPlatform.getAnalyzerServices()
         val configuration = compilerConfigurationProvider.getCompilerConfiguration(module)
         val extensionRegistrars = FirExtensionRegistrar.getInstances(project)
 
@@ -99,13 +85,13 @@ class FirFrontendFacade(
 
         val isCommonOrJvm = module.targetPlatform.isJvm() || module.targetPlatform.isCommon()
 
-        val dependencyList = buildDependencyList(module, moduleName, moduleInfoProvider, analyzerServices) {
-            if (isCommonOrJvm || module.targetPlatform.isNative()) {
-                configureJvmDependencies(configuration)
-            } else {
-                configureJsDependencies(module, testServices)
-            }
+        val dependencyConfigurator = when {
+            isCommonOrJvm || module.targetPlatform.isNative() -> JvmDependenciesConfigurator(module, testServices, configuration)
+            module.targetPlatform.isJs() -> JsDependenciesConfigurator(module, testServices)
+            else -> error("Unsupported")
         }
+        val dependencyList = dependencyConfigurator.buildDependencyList()
+        val moduleInfoProvider = dependencyConfigurator.moduleInfoProvider
 
         val projectEnvironment: VfsBasedProjectEnvironment?
 
@@ -222,63 +208,6 @@ class FirFrontendFacade(
 
         return FirOutputArtifactImpl(session, filesMap, firAnalyzerFacade)
     }
-}
-
-private fun DependencyListForCliModule.Builder.configureJvmDependencies(
-    configuration: CompilerConfiguration,
-) {
-    dependencies(configuration.jvmModularRoots.map { it.toPath() })
-    dependencies(configuration.jvmClasspathRoots.map { it.toPath() })
-
-    friendDependencies(configuration[JVMConfigurationKeys.FRIEND_PATHS] ?: emptyList())
-}
-
-private fun DependencyListForCliModule.Builder.configureJsDependencies(
-    module: TestModule,
-    testServices: TestServices,
-) {
-    val (runtimeKlibsPaths, transitiveLibraries, friendLibraries) = getJsDependencies(module, testServices)
-
-    dependencies(runtimeKlibsPaths.map { Paths.get(it).toAbsolutePath() })
-    dependencies(transitiveLibraries.map { it.toPath().toAbsolutePath() })
-
-    friendDependencies(friendLibraries.map { it.toPath().toAbsolutePath() })
-}
-
-private fun getJsDependencies(module: TestModule, testServices: TestServices): Triple<List<String>, List<File>, List<File>> {
-    val runtimeKlibsPaths = JsEnvironmentConfigurator.getRuntimePathsForModule(module, testServices)
-    val transitiveLibraries = JsEnvironmentConfigurator.getKlibDependencies(module, testServices, DependencyRelation.RegularDependency)
-    val friendLibraries = JsEnvironmentConfigurator.getKlibDependencies(module, testServices, DependencyRelation.FriendDependency)
-    return Triple(runtimeKlibsPaths, transitiveLibraries, friendLibraries)
-}
-
-private fun getAllJsDependenciesPaths(module: TestModule, testServices: TestServices): List<String> {
-    val (runtimeKlibsPaths, transitiveLibraries, friendLibraries) = getJsDependencies(module, testServices)
-    return runtimeKlibsPaths + transitiveLibraries.map { it.path } + friendLibraries.map { it.path }
-}
-
-fun resolveJsLibraries(
-    module: TestModule,
-    testServices: TestServices,
-    configuration: CompilerConfiguration
-): List<KotlinResolvedLibrary> {
-    val paths = getAllJsDependenciesPaths(module, testServices)
-    val repositories = configuration[JSConfigurationKeys.REPOSITORIES] ?: emptyList()
-    val logger = configuration.resolverLogger
-    return jsResolveLibraries(paths, repositories, logger).getFullResolvedList()
-}
-
-private fun buildDependencyList(
-    module: TestModule,
-    moduleName: Name,
-    moduleInfoProvider: FirModuleInfoProvider,
-    analyzerServices: PlatformDependentAnalyzerServices,
-    configureDependencies: DependencyListForCliModule.Builder.() -> Unit,
-) = DependencyListForCliModule.build(moduleName, module.targetPlatform, analyzerServices) {
-    configureDependencies()
-    sourceDependencies(moduleInfoProvider.getRegularDependentSourceModules(module))
-    sourceFriendsDependencies(moduleInfoProvider.getDependentFriendSourceModules(module))
-    sourceDependsOnDependencies(moduleInfoProvider.getDependentDependsOnSourceModules(module))
 }
 
 fun TargetPlatform.getAnalyzerServices(): PlatformDependentAnalyzerServices {
