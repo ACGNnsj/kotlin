@@ -17,6 +17,7 @@ import org.jetbrains.kotlin.cli.jvm.compiler.VfsBasedProjectEnvironment
 import org.jetbrains.kotlin.fir.*
 import org.jetbrains.kotlin.fir.checkers.registerExtendedCommonCheckers
 import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrar
+import org.jetbrains.kotlin.fir.session.FirCommonSessionFactory
 import org.jetbrains.kotlin.fir.session.FirJvmSessionFactory
 import org.jetbrains.kotlin.fir.session.FirSessionConfigurator
 import org.jetbrains.kotlin.name.Name
@@ -50,7 +51,6 @@ class FirFrontendFacade(
         get() = listOf(FirDiagnosticsDirectives)
 
     override fun analyze(module: TestModule): FirOutputArtifact {
-        //val moduleInfoProvider = testServices.firModuleInfoProvider
         val compilerConfigurationProvider = testServices.compilerConfigurationProvider
         // TODO: add configurable parser
 
@@ -77,10 +77,9 @@ class FirFrontendFacade(
             additionalSessionConfiguration?.invoke(this)
         }
 
-        val isCommonOrJvm = module.targetPlatform.isJvm() || module.targetPlatform.isCommon()
-
         val dependencyConfigurator = when {
-            isCommonOrJvm || module.targetPlatform.isNative() -> JvmDependenciesConfigurator(module, testServices, configuration)
+            module.targetPlatform.isCommon() || module.targetPlatform.isJvm() || module.targetPlatform.isNative() ->
+                JvmDependenciesConfigurator(module, testServices, configuration)
             module.targetPlatform.isJs() -> JsDependenciesConfigurator(module, testServices)
             else -> error("Unsupported")
         }
@@ -90,7 +89,7 @@ class FirFrontendFacade(
         val projectEnvironment: VfsBasedProjectEnvironment?
 
         when {
-            isCommonOrJvm -> {
+            module.targetPlatform.isCommon() || module.targetPlatform.isJvm() -> {
                 val packagePartProviderFactory = compilerConfigurationProvider.getPackagePartProviderFactory(module)
                 projectEnvironment = VfsBasedProjectEnvironment(
                     project, VirtualFileManager.getInstance().getFileSystem(StandardFileSystems.FILE_PROTOCOL),
@@ -98,15 +97,27 @@ class FirFrontendFacade(
                 val projectFileSearchScope = PsiBasedProjectFileSearchScope(ProjectScope.getLibrariesScope(project))
                 val packagePartProvider = projectEnvironment.getPackagePartProvider(projectFileSearchScope)
 
-                FirJvmSessionFactory.createLibrarySession(
-                    moduleName,
-                    moduleInfoProvider.firSessionProvider,
-                    dependencyList,
-                    projectEnvironment,
-                    projectFileSearchScope,
-                    packagePartProvider,
-                    languageVersionSettings,
-                )
+                if (module.targetPlatform.isCommon()) {
+                    FirCommonSessionFactory.createLibrarySession(
+                        moduleName,
+                        moduleInfoProvider.firSessionProvider,
+                        dependencyList,
+                        projectEnvironment,
+                        projectFileSearchScope,
+                        packagePartProvider,
+                        languageVersionSettings
+                    )
+                } else {
+                    FirJvmSessionFactory.createLibrarySession(
+                        moduleName,
+                        moduleInfoProvider.firSessionProvider,
+                        dependencyList,
+                        projectEnvironment,
+                        projectFileSearchScope,
+                        packagePartProvider,
+                        languageVersionSettings,
+                    )
+                }
             }
             module.targetPlatform.isJs() -> {
                 projectEnvironment = null
@@ -142,7 +153,20 @@ class FirFrontendFacade(
         )
 
         val session = when {
-            isCommonOrJvm -> {
+            module.targetPlatform.isCommon() -> {
+                FirCommonSessionFactory.createModuleBasedSession(
+                    mainModuleData,
+                    moduleInfoProvider.firSessionProvider,
+                    projectEnvironment!!,
+                    incrementalCompilationContext = null,
+                    extensionRegistrars,
+                    languageVersionSettings,
+                    lookupTracker = null,
+                    enumWhenTracker = null,
+                    sessionConfigurator,
+                )
+            }
+            module.targetPlatform.isJvm() -> {
                 FirJvmSessionFactory.createModuleBasedSession(
                     mainModuleData,
                     moduleInfoProvider.firSessionProvider,
@@ -154,7 +178,7 @@ class FirFrontendFacade(
                     lookupTracker = null,
                     enumWhenTracker = null,
                     needRegisterJavaElementFinder = true,
-                    sessionConfigurator,
+                    init = sessionConfigurator,
                 )
             }
             module.targetPlatform.isJs() -> {
@@ -203,5 +227,3 @@ class FirFrontendFacade(
         return FirOutputArtifactImpl(session, filesMap, firAnalyzerFacade)
     }
 }
-
-

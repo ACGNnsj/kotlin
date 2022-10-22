@@ -59,4 +59,5 @@ class JavaSymbolProvider(
 }
 
 val FirSession.javaSymbolProvider: JavaSymbolProvider by FirSession.sessionComponentAccessor()
+val FirSession.nullableJavaSymbolProvider: JavaSymbolProvider? by FirSession.nullableSessionComponentAccessor()
 

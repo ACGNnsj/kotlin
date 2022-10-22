@@ -12,11 +12,11 @@ import org.jetbrains.kotlin.fir.analysis.checkers.declaration.FirRegularClassChe
 import org.jetbrains.kotlin.fir.analysis.diagnostics.FirErrors
 import org.jetbrains.kotlin.fir.declarations.FirRegularClass
 import org.jetbrains.kotlin.fir.declarations.utils.classId
-import org.jetbrains.kotlin.fir.java.javaSymbolProvider
+import org.jetbrains.kotlin.fir.java.nullableJavaSymbolProvider
 
 object FirJvmConflictsChecker : FirRegularClassChecker() {
     override fun check(declaration: FirRegularClass, context: CheckerContext, reporter: DiagnosticReporter) {
-        val javaSymbol = context.session.javaSymbolProvider.getClassLikeSymbolByClassId(declaration.classId) ?: return
+        val javaSymbol = context.session.nullableJavaSymbolProvider?.getClassLikeSymbolByClassId(declaration.classId) ?: return
         reporter.reportOn(
             declaration.source, FirErrors.PACKAGE_OR_CLASSIFIER_REDECLARATION, listOf(declaration.symbol, javaSymbol), context
         )
