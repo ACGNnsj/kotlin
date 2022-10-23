@@ -412,12 +412,13 @@ fun createSession(
             dependencies(moduleConfiguration.jvmModularRoots.map { it.toPath() })
             friendDependencies(moduleConfiguration[JVMConfigurationKeys.FRIEND_PATHS] ?: emptyList())
             dependenciesConfigurator()
+        },
+        sessionConfigurator = {
+            if (extendedAnalysisMode) {
+                registerExtendedCommonCheckers()
+            }
         }
-    ) {
-        if (extendedAnalysisMode) {
-            registerExtendedCommonCheckers()
-        }
-    }
+    )
 }
 
 private fun createContextForIncrementalCompilation(

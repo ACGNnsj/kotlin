@@ -11,5 +11,4 @@ compiler or generated code. Use it at your own risk!
 warning: ATTENTION!
  This build uses experimental K2 compiler:
   -Xuse-k2
-error: k2 compiler does not support multi-platform projects yet, so please remove -Xuse-k2 flag
-COMPILATION_ERROR
+OK

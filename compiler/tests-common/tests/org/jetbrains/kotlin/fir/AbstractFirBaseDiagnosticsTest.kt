@@ -102,10 +102,11 @@ abstract class AbstractFirBaseDiagnosticsTest : BaseDiagnosticsTest() {
                 enumWhenTracker = null,
                 incrementalCompilationContext = null,
                 extensionRegistrars = emptyList(),
-                needRegisterJavaElementFinder = true
-            ) {
-                configureSession()
-            }
+                needRegisterJavaElementFinder = true,
+                sessionConfigurator = {
+                    configureSession()
+                }
+            )
         }
 
         val firFilesPerSession = mutableMapOf<FirSession, List<FirFile>>()

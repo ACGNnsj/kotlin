@@ -8,6 +8,7 @@
 package org.jetbrains.kotlin.cli.jvm.compiler
 
 import org.jetbrains.kotlin.analyzer.common.CommonPlatformAnalyzerServices
+import org.jetbrains.kotlin.backend.common.IrActualizer
 import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
 import org.jetbrains.kotlin.backend.jvm.JvmGeneratorExtensions
 import org.jetbrains.kotlin.backend.jvm.JvmIrCodegenFactory
@@ -26,22 +27,22 @@ import org.jetbrains.kotlin.cli.jvm.config.jvmModularRoots
 import org.jetbrains.kotlin.codegen.ClassBuilderFactories
 import org.jetbrains.kotlin.codegen.CodegenFactory
 import org.jetbrains.kotlin.codegen.state.GenerationState
-import org.jetbrains.kotlin.compiler.plugin.ComponentRegistrar
 import org.jetbrains.kotlin.compiler.plugin.CompilerPluginRegistrar
+import org.jetbrains.kotlin.compiler.plugin.ComponentRegistrar
 import org.jetbrains.kotlin.config.*
 import org.jetbrains.kotlin.diagnostics.DiagnosticReporterFactory
 import org.jetbrains.kotlin.diagnostics.impl.BaseDiagnosticsCollector
 import org.jetbrains.kotlin.fir.*
-import org.jetbrains.kotlin.fir.backend.Fir2IrResult
-import org.jetbrains.kotlin.fir.backend.jvm.FirJvmBackendClassResolver
-import org.jetbrains.kotlin.fir.backend.jvm.FirJvmBackendExtension
-import org.jetbrains.kotlin.fir.backend.jvm.JvmFir2IrExtensions
+import org.jetbrains.kotlin.fir.backend.*
+import org.jetbrains.kotlin.fir.backend.jvm.*
 import org.jetbrains.kotlin.fir.checkers.registerExtendedCommonCheckers
 import org.jetbrains.kotlin.fir.declarations.FirFile
 import org.jetbrains.kotlin.fir.declarations.FirSimpleFunction
 import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrar
 import org.jetbrains.kotlin.fir.java.FirProjectSessionProvider
 import org.jetbrains.kotlin.fir.pipeline.*
+import org.jetbrains.kotlin.fir.resolve.providers.firProvider
+import org.jetbrains.kotlin.fir.resolve.providers.impl.FirProviderImpl
 import org.jetbrains.kotlin.fir.session.FirSessionFactoryHelper
 import org.jetbrains.kotlin.fir.session.IncrementalCompilationContext
 import org.jetbrains.kotlin.fir.session.environment.AbstractProjectEnvironment
@@ -52,6 +53,7 @@ import org.jetbrains.kotlin.fir.types.isArrayType
 import org.jetbrains.kotlin.fir.types.isString
 import org.jetbrains.kotlin.fir.visitors.FirVisitorVoid
 import org.jetbrains.kotlin.ir.backend.jvm.serialization.JvmIrMangler
+import org.jetbrains.kotlin.ir.symbols.*
 import org.jetbrains.kotlin.load.kotlin.incremental.IncrementalPackagePartProvider
 import org.jetbrains.kotlin.load.kotlin.incremental.components.IncrementalCompilationComponents
 import org.jetbrains.kotlin.modules.Module
@@ -102,15 +104,8 @@ object FirKotlinToJvmBytecodeCompiler {
             )
             return false
         }
-        if (projectConfiguration.languageVersionSettings.supportsFeature(LanguageFeature.MultiPlatformProjects)) {
-            messageCollector.report(
-                CompilerMessageSeverity.ERROR,
-                "K2 compiler does not support multi-platform projects yet, so please remove -Xuse-k2 flag"
-            )
-            return false
-        }
 
-        val outputs = ArrayList<Pair<ModuleCompilerAnalyzedOutput, GenerationState>>(chunk.size)
+        val outputs = ArrayList<Pair<FirResult, GenerationState>>(chunk.size)
         val targetIds = projectConfiguration.get(JVMConfigurationKeys.MODULES)?.map(::TargetId)
         val incrementalComponents = projectConfiguration.get(JVMConfigurationKeys.INCREMENTAL_COMPILATION_COMPONENTS)
         val isMultiModuleChunk = chunk.size > 1
@@ -140,14 +135,14 @@ object FirKotlinToJvmBytecodeCompiler {
         }
 
         val mainClassFqName: FqName? = runIf(chunk.size == 1 && projectConfiguration.get(JVMConfigurationKeys.OUTPUT_JAR) != null) {
-            findMainClass(outputs.single().first.fir)
+            findMainClass(outputs.single().first.platformOutput.fir)
         }
 
         return writeOutputs(
             project,
             projectConfiguration,
             chunk,
-            outputs.map(Pair<ModuleCompilerAnalyzedOutput, GenerationState>::second),
+            outputs.map(Pair<FirResult, GenerationState>::second),
             mainClassFqName
         )
     }
@@ -160,7 +155,7 @@ object FirKotlinToJvmBytecodeCompiler {
             ?.mapTo(destination) { it::class.qualifiedName }
     }
 
-    private fun CompilationContext.compileModule(): Pair<ModuleCompilerAnalyzedOutput, GenerationState>? {
+    private fun CompilationContext.compileModule(): Pair<FirResult, GenerationState>? {
         performanceManager?.notifyAnalysisStarted()
         ProgressIndicatorAndCompilationCanceledStatus.checkCanceled()
 
@@ -181,16 +176,38 @@ object FirKotlinToJvmBytecodeCompiler {
         performanceManager?.notifyIRTranslationStarted()
 
         val fir2IrExtensions = JvmFir2IrExtensions(moduleConfiguration, JvmIrDeserializerImpl(), JvmIrMangler)
-        val linkViaSignatures = moduleConfiguration.getBoolean(JVMConfigurationKeys.LINK_VIA_SIGNATURES)
-        val fir2IrResult = firResult.convertToIr(fir2IrExtensions, irGenerationExtensions, linkViaSignatures)
+        val commonFirOutput = firResult.commonOutput
+        val platformFirOutput = firResult.platformOutput
+        val platformIrOutput: Fir2IrResult
+
+        if (commonFirOutput != null) {
+            val commonIrOutput = commonFirOutput.convertToIr(fir2IrExtensions, irGenerationExtensions, linkViaSignatures = true)
+            platformIrOutput = platformFirOutput.convertToIr(
+                fir2IrExtensions, irGenerationExtensions,
+                linkViaSignatures = true,
+                dependentComponents = listOf(commonIrOutput.components)
+            )
+            IrActualizer.actualize(platformIrOutput.irModuleFragment, listOf(commonIrOutput.irModuleFragment))
+        } else {
+            val commonFir = platformFirOutput.session.moduleData.dependsOnDependencies
+                .map { it.session }
+                .filter { it.kind == FirSession.Kind.Source }
+                .flatMap { (it.firProvider as FirProviderImpl).getAllFirFiles() }
+            platformIrOutput = platformFirOutput.convertToIr(
+                fir2IrExtensions,
+                irGenerationExtensions,
+                linkViaSignatures = moduleConfiguration.getBoolean(JVMConfigurationKeys.LINK_VIA_SIGNATURES),
+                extraFir = commonFir
+            )
+        }
 
         performanceManager?.notifyIRTranslationFinished()
 
         val generationState = runBackend(
             allSources,
-            fir2IrResult,
+            platformIrOutput,
             fir2IrExtensions,
-            firResult.session,
+            platformFirOutput.session,
             diagnosticsReporter
         )
 
@@ -203,7 +220,7 @@ object FirKotlinToJvmBytecodeCompiler {
         return firResult to generationState
     }
 
-    private fun CompilationContext.runFrontend(ktFiles: List<KtFile>, diagnosticsReporter: BaseDiagnosticsCollector): ModuleCompilerAnalyzedOutput? {
+    private fun CompilationContext.runFrontend(ktFiles: List<KtFile>, diagnosticsReporter: BaseDiagnosticsCollector): FirResult? {
         @Suppress("NAME_SHADOWING")
         var ktFiles = ktFiles
         val syntaxErrors = ktFiles.fold(false) { errorsFound, ktFile ->
@@ -232,8 +249,8 @@ object FirKotlinToJvmBytecodeCompiler {
             platform: TargetPlatform,
             analyzerServices: PlatformDependentAnalyzerServices,
             sourceScope: AbstractProjectFileSearchScope,
-            needRegisterJavaElementFinder: Boolean,
-            dependenciesConfigurator: DependencyListForCliModule.Builder.() -> Unit = {}
+            dependenciesConfigurator: DependencyListForCliModule.Builder.() -> Unit,
+            isCommonSession: Boolean
         ): FirSession {
             return FirSessionFactoryHelper.createSessionWithDependencies(
                 Name.identifier(name),
@@ -248,18 +265,20 @@ object FirKotlinToJvmBytecodeCompiler {
                 enumWhenTracker = moduleConfiguration.get(CommonConfigurationKeys.ENUM_WHEN_TRACKER),
                 providerAndScopeForIncrementalCompilation,
                 firExtensionRegistrars,
-                needRegisterJavaElementFinder,
+                !isCommonSession,
                 dependenciesConfigurator = {
                     dependencies(moduleConfiguration.jvmClasspathRoots.map { it.toPath() })
                     dependencies(moduleConfiguration.jvmModularRoots.map { it.toPath() })
                     friendDependencies(moduleConfiguration[JVMConfigurationKeys.FRIEND_PATHS] ?: emptyList())
                     dependenciesConfigurator()
-                }
-            ) {
-                if (extendedAnalysisMode) {
-                    registerExtendedCommonCheckers()
-                }
-            }
+                },
+                sessionConfigurator = {
+                    if (extendedAnalysisMode) {
+                        registerExtendedCommonCheckers()
+                    }
+                },
+                isCommonSession = isCommonSession,
+            )
         }
 
         val commonSession = runIf(
@@ -273,7 +292,8 @@ object FirKotlinToJvmBytecodeCompiler {
                 CommonPlatforms.defaultCommonPlatform,
                 CommonPlatformAnalyzerServices,
                 commonSourcesScope,
-                needRegisterJavaElementFinder = false
+                dependenciesConfigurator = {},
+                isCommonSession = true
             )
         }
 
@@ -282,26 +302,33 @@ object FirKotlinToJvmBytecodeCompiler {
             JvmPlatforms.unspecifiedJvmPlatform,
             JvmPlatformAnalyzerServices,
             sourceScope,
-            needRegisterJavaElementFinder = true
-        ) {
-            if (commonSession != null) {
-                sourceDependsOnDependencies(listOf(commonSession.moduleData))
-            }
-            friendDependencies(module.getFriendPaths())
+            dependenciesConfigurator = {
+                if (commonSession != null) {
+                    sourceDependsOnDependencies(listOf(commonSession.moduleData))
+                }
+                friendDependencies(module.getFriendPaths())
+            },
+            isCommonSession = false
+        )
+
+        val commonOutput: ModuleCompilerAnalyzedOutput?
+        if (commonSession != null) {
+            val commonRawFir = commonSession.buildFirFromKtFiles(commonKtFiles)
+            val commonResult = commonSession.runResolution(commonRawFir)
+            commonOutput = ModuleCompilerAnalyzedOutput(commonSession, commonResult.first, commonResult.second)
+            commonSession.runCheckers(commonOutput.scopeSession, commonOutput.fir, diagnosticsReporter)
+        } else {
+            commonOutput = null
         }
 
-        val commonRawFir = commonSession?.buildFirFromKtFiles(commonKtFiles)
         val rawFir = session.buildFirFromKtFiles(ktFiles)
-
-        commonSession?.apply {
-            val (commonScopeSession, commonFir) = runResolution(commonRawFir!!)
-            runCheckers(commonScopeSession, commonFir, diagnosticsReporter)
-        }
-
         val (scopeSession, fir) = session.runResolution(rawFir)
         session.runCheckers(scopeSession, fir, diagnosticsReporter)
 
-        return if (syntaxErrors || diagnosticsReporter.hasErrors) null else ModuleCompilerAnalyzedOutput(session, scopeSession, fir)
+        return if (syntaxErrors || diagnosticsReporter.hasErrors)
+            null
+        else
+            FirResult(ModuleCompilerAnalyzedOutput(session, scopeSession, fir), commonOutput)
     }
 
     private fun CompilationContext.createComponentsForIncrementalCompilation(

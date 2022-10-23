@@ -37,19 +37,32 @@ object FirSessionFactoryHelper {
         needRegisterJavaElementFinder: Boolean,
         dependenciesConfigurator: DependencyListForCliModule.Builder.() -> Unit = {},
         noinline sessionConfigurator: FirSessionConfigurator.() -> Unit = {},
+        isCommonSession: Boolean = false
     ): FirSession {
         val dependencyList = DependencyListForCliModule.build(moduleName, platform, analyzerServices, dependenciesConfigurator)
         val sessionProvider = externalSessionProvider ?: FirProjectSessionProvider()
         val packagePartProvider = projectEnvironment.getPackagePartProvider(librariesScope)
-        FirJvmSessionFactory.createLibrarySession(
-            moduleName,
-            sessionProvider,
-            dependencyList,
-            projectEnvironment,
-            librariesScope,
-            packagePartProvider,
-            languageVersionSettings
-        )
+        if (isCommonSession) {
+            FirCommonSessionFactory.createLibrarySession(
+                moduleName,
+                sessionProvider,
+                dependencyList,
+                projectEnvironment,
+                librariesScope,
+                packagePartProvider,
+                languageVersionSettings
+            )
+        } else {
+            FirJvmSessionFactory.createLibrarySession(
+                moduleName,
+                sessionProvider,
+                dependencyList,
+                projectEnvironment,
+                librariesScope,
+                packagePartProvider,
+                languageVersionSettings
+            )
+        }
 
         val mainModuleData = FirModuleDataImpl(
             moduleName,
@@ -59,19 +72,33 @@ object FirSessionFactoryHelper {
             dependencyList.platform,
             dependencyList.analyzerServices
         )
-        return FirJvmSessionFactory.createModuleBasedSession(
-            mainModuleData,
-            sessionProvider,
-            javaSourcesScope,
-            projectEnvironment,
-            incrementalCompilationContext,
-            extensionRegistrars,
-            languageVersionSettings,
-            lookupTracker,
-            enumWhenTracker,
-            needRegisterJavaElementFinder,
-            sessionConfigurator
-        )
+        return if (isCommonSession) {
+            FirCommonSessionFactory.createModuleBasedSession(
+                mainModuleData,
+                sessionProvider,
+                projectEnvironment,
+                incrementalCompilationContext,
+                extensionRegistrars,
+                languageVersionSettings,
+                lookupTracker,
+                enumWhenTracker,
+                sessionConfigurator
+            )
+        } else {
+            FirJvmSessionFactory.createModuleBasedSession(
+                mainModuleData,
+                sessionProvider,
+                javaSourcesScope,
+                projectEnvironment,
+                incrementalCompilationContext,
+                extensionRegistrars,
+                languageVersionSettings,
+                lookupTracker,
+                enumWhenTracker,
+                needRegisterJavaElementFinder,
+                sessionConfigurator,
+            )
+        }
     }
 
     @OptIn(SessionConfiguration::class, PrivateSessionConstructor::class)
