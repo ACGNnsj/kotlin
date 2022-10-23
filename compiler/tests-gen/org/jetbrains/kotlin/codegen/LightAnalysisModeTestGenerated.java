@@ -26893,6 +26893,11 @@ public class LightAnalysisModeTestGenerated extends AbstractLightAnalysisModeTes
                 runTest("compiler/testData/codegen/box/multiplatform/multiModule/correctParentForTypeParameter.kt");
             }
 
+            @TestMetadata("expectActualMultiCommon.kt")
+            public void testExpectActualMultiCommon() throws Exception {
+                runTest("compiler/testData/codegen/box/multiplatform/multiModule/expectActualMultiCommon.kt");
+            }
+
             @TestMetadata("expectActualSimple.kt")
             public void testExpectActualSimple() throws Exception {
                 runTest("compiler/testData/codegen/box/multiplatform/multiModule/expectActualSimple.kt");

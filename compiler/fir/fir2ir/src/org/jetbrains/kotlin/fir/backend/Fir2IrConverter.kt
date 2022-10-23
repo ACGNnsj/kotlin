@@ -423,7 +423,8 @@ class Fir2IrConverter(
             visibilityConverter: Fir2IrVisibilityConverter,
             specialSymbolProvider: Fir2IrSpecialSymbolProvider,
             irGenerationExtensions: Collection<IrGenerationExtension>,
-            generateSignatures: Boolean
+            generateSignatures: Boolean,
+            dependentComponents: List<Fir2IrComponents> = emptyList()
         ): Fir2IrResult {
             if (!generateSignatures) {
                 return createModuleFragmentWithoutSignatures(
@@ -434,12 +435,12 @@ class Fir2IrConverter(
             }
             val signatureComposer = FirBasedSignatureComposer(mangler)
             val wrappedSignaturer = WrappedDescriptorSignatureComposer(signaturer, signatureComposer)
-            val symbolTable = SymbolTable(wrappedSignaturer, irFactory)
+            val symbolTable = SymbolTable(wrappedSignaturer, irFactory, dependentTables = dependentComponents.map { it.symbolTable })
             return createModuleFragmentWithSymbolTable(
                 session, scopeSession, firFiles, languageVersionSettings,
                 fir2IrExtensions, irMangler, irFactory, visibilityConverter,
                 specialSymbolProvider, irGenerationExtensions, signatureComposer,
-                symbolTable, generateSignatures = true
+                symbolTable, generateSignatures = true, dependentComponents = dependentComponents
             )
         }
 
@@ -463,7 +464,7 @@ class Fir2IrConverter(
                 session, scopeSession, firFiles, languageVersionSettings,
                 fir2IrExtensions, irMangler, irFactory, visibilityConverter,
                 specialSymbolProvider, irGenerationExtensions, signatureComposer,
-                symbolTable, generateSignatures = false
+                symbolTable, generateSignatures = false, dependentComponents = emptyList()
             )
         }
 
@@ -480,7 +481,8 @@ class Fir2IrConverter(
             irGenerationExtensions: Collection<IrGenerationExtension>,
             signatureComposer: FirBasedSignatureComposer,
             symbolTable: SymbolTable,
-            generateSignatures: Boolean
+            generateSignatures: Boolean,
+            dependentComponents: List<Fir2IrComponents>
         ): Fir2IrResult {
             val moduleDescriptor = FirModuleDescriptor(session)
             val components = Fir2IrComponentsStorage(
@@ -490,7 +492,7 @@ class Fir2IrConverter(
 
             components.converter = converter
 
-            val classifierStorage = Fir2IrClassifierStorage(components)
+            val classifierStorage = Fir2IrClassifierStorage(components, dependentComponents.map { it.classifierStorage })
             components.classifierStorage = classifierStorage
             components.delegatedMemberGenerator = DelegatedMemberGenerator(components)
             val declarationStorage = Fir2IrDeclarationStorage(components, moduleDescriptor)
