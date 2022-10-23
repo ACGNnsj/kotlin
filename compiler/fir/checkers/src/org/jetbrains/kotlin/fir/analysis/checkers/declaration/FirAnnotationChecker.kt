@@ -25,10 +25,7 @@ import org.jetbrains.kotlin.fir.languageVersionSettings
 import org.jetbrains.kotlin.fir.packageFqName
 import org.jetbrains.kotlin.fir.resolve.fqName
 import org.jetbrains.kotlin.fir.resolve.fullyExpandedType
-import org.jetbrains.kotlin.fir.types.ConeKotlinType
-import org.jetbrains.kotlin.fir.types.coneType
-import org.jetbrains.kotlin.fir.types.coneTypeSafe
-import org.jetbrains.kotlin.fir.types.customAnnotations
+import org.jetbrains.kotlin.fir.types.*
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.StandardClassIds
 
@@ -54,6 +51,16 @@ object FirAnnotationChecker : FirBasicDeclarationChecker() {
 
             checkAnnotationTarget(declaration, annotation, context, reporter)
         }
+
+        if (declaration is FirCallableDeclaration) {
+            val receiverTypeRef = declaration.receiverTypeRef
+            if (receiverTypeRef != null) {
+                for (receiverAnnotation in receiverTypeRef.annotations) {
+                    reportIfMfvc(context, reporter, receiverAnnotation, "receivers", receiverTypeRef)
+                }
+            }
+        }
+
         if (deprecatedSinceKotlin != null) {
             checkDeprecatedCalls(deprecatedSinceKotlin, deprecated, context, reporter)
         }
@@ -71,16 +78,26 @@ object FirAnnotationChecker : FirBasicDeclarationChecker() {
         }
     }
 
+    private fun reportIfMfvc(context: CheckerContext, reporter: DiagnosticReporter, annotation: FirAnnotation, hint: String, type: FirTypeRef) {
+        if (type.needsMfvcFlattening(context.session)) {
+            reporter.reportOn(annotation.source, FirErrors.ANNOTATION_ON_ILLEGAL_MULTI_FIELD_VALUE_CLASS_TYPED_TARGET, hint, context)
+        }
+    }
+
     private fun checkMultiFieldValueClassAnnotationRestrictions(
         declaration: FirDeclaration,
         annotation: FirAnnotation,
         context: CheckerContext,
         reporter: DiagnosticReporter
     ) {
+        fun FirPropertyAccessor.hasNoReceivers() = contextReceivers.isEmpty() && receiverTypeRef == null &&
+                propertySymbol.resolvedReceiverTypeRef == null && propertySymbol.resolvedContextReceivers.isEmpty()
+
         val (hint, type) = when (annotation.useSiteTarget) {
-            FIELD, PROPERTY_DELEGATE_FIELD -> "fields" to ((declaration as? FirProperty)?.backingField?.returnTypeRef ?: return)
+            FIELD -> "fields" to ((declaration as? FirProperty)?.backingField?.returnTypeRef ?: return)
+            PROPERTY_DELEGATE_FIELD -> "delegate fields" to ((declaration as? FirProperty)?.delegate?.typeRef ?: return)
             FILE, PROPERTY, PROPERTY_SETTER -> return
-            PROPERTY_GETTER -> "getters" to ((declaration as? FirPropertyAccessor)?.returnTypeRef ?: return)
+            PROPERTY_GETTER -> "getters" to ((declaration as? FirPropertyAccessor)?.takeIf { it.hasNoReceivers() }?.returnTypeRef ?: return)
             RECEIVER -> "receivers" to ((declaration as? FirCallableDeclaration)?.receiverTypeRef ?: return)
             CONSTRUCTOR_PARAMETER, SETTER_PARAMETER -> "parameters" to (declaration as? FirValueParameter ?: return).returnTypeRef
             null -> when {
@@ -88,17 +105,13 @@ object FirAnnotationChecker : FirBasicDeclarationChecker() {
                 declaration is FirField -> "fields" to declaration.returnTypeRef
                 declaration is FirValueParameter -> "parameters" to declaration.returnTypeRef
                 declaration is FirVariable -> "variables" to declaration.returnTypeRef
-                declaration is FirPropertyAccessor && declaration.isGetter &&
-                        declaration.receiverTypeRef == null &&
-                        declaration.contextReceivers.isEmpty() ->
+                declaration is FirPropertyAccessor && declaration.isGetter && declaration.hasNoReceivers() ->
                     "getters" to declaration.returnTypeRef
 
                 else -> return
             }
         }
-        if (type.needsMfvcFlattening(context.session)) {
-            reporter.reportOn(annotation.source, FirErrors.ANNOTATION_ON_ILLEGAL_MULTI_FIELD_VALUE_CLASS_TYPED_TARGET, hint, context)
-        }
+        reportIfMfvc(context, reporter, annotation, hint, type)
     }
 
     private fun checkAnnotationTarget(

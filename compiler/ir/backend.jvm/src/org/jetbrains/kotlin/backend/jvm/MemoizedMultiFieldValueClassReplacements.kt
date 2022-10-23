@@ -301,10 +301,30 @@ class MemoizedMultiFieldValueClassReplacements(
             createIntermediateNodeForMfvcPropertyOfRegularClass(parent, context, property)
         }
 
-    fun getRegularClassMfvcPropertyNode(property: IrProperty): IntermediateMfvcNode? {
+    fun getMfvcFieldNode(field: IrField): NameableMfvcNode? {
+        val parent = field.parent
+        val property = field.correspondingPropertySymbol?.owner
+        return when {
+            property?.isDelegated == false -> getMfvcPropertyNode(property)
+            parent !is IrClass -> null
+            !field.type.needsMfvcFlattening() -> null
+            else -> getMfvcStandaloneFieldNodeImpl(field)
+        }
+    }
+
+    private val getMfvcStandaloneFieldNodeImpl: (IrField) -> NameableMfvcNode = storageManager.createMemoizedFunction { field ->
+        val parent = field.parentAsClass
+        createIntermediateNodeForStandaloneMfvcField(parent, context, field)
+    }
+
+    private fun getRegularClassMfvcPropertyNode(property: IrProperty): IntermediateMfvcNode? {
         val parent = property.parent
         return when {
-            property.run { backingField?.type ?: getter?.returnType }?.needsMfvcFlattening() != true -> null
+            property.run {
+                val types = listOfNotNull(backingField?.takeUnless { property.isDelegated }?.type, getter?.returnType)
+                types.isEmpty() || types.any { !it.needsMfvcFlattening() }
+            } -> null
+
             parent !is IrClass -> null
             property.isFakeOverride -> null
             property.getter.let { it != null && (it.contextReceiverParametersCount > 0 || it.extensionReceiverParameter != null) } -> null

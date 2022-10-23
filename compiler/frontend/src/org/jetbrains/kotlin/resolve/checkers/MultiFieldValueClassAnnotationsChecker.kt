@@ -8,9 +8,8 @@ package org.jetbrains.kotlin.resolve.checkers
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.AnnotationUseSiteTarget.*
 import org.jetbrains.kotlin.diagnostics.Errors
-import org.jetbrains.kotlin.psi.KtAnnotation
-import org.jetbrains.kotlin.psi.KtDeclaration
-import org.jetbrains.kotlin.psi.KtFunction
+import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.resolve.calls.util.getType
 import org.jetbrains.kotlin.resolve.needsMfvcFlattening
 import org.jetbrains.kotlin.types.KotlinType
 
@@ -26,13 +25,23 @@ object MultiFieldValueClassAnnotationsChecker : DeclarationChecker {
 
         for (annotationDecl in declaration.annotations) {
             val (hint, type) = when (annotationDecl.useSiteTarget?.getAnnotationUseSiteTarget()) {
-                FIELD, PROPERTY_DELEGATE_FIELD -> "fields" to (descriptor as? PropertyDescriptor ?: continue).type
+                FIELD -> "fields" to (descriptor as? PropertyDescriptor ?: continue).type
+                PROPERTY_DELEGATE_FIELD -> "delegate fields" to ((declaration as? KtProperty)?.takeIf { descriptor is PropertyDescriptor }?.delegateExpression?.getType(context.trace.bindingContext) ?: continue)
                 FILE, PROPERTY, PROPERTY_SETTER -> continue
                 PROPERTY_GETTER -> "getters" to (descriptor as? PropertyDescriptor ?: continue).type
                 RECEIVER -> "receivers" to ((descriptor as? CallableMemberDescriptor)?.extensionReceiverParameter?.type ?: continue)
                 CONSTRUCTOR_PARAMETER, SETTER_PARAMETER -> "parameters" to (descriptor as? ValueParameterDescriptor ?: continue).type
                 null -> when {
-                    descriptor is PropertyDescriptor -> continue
+                    descriptor is PropertyDescriptor -> {
+                        if (declaration !is KtProperty) continue
+                        val receiverDescriptor = descriptor.extensionReceiverParameter ?: continue
+                        val receiverDeclaration = declaration.receiverTypeReference ?: continue
+                        for (receiverAnnotation in receiverDeclaration.annotations) {
+                            report(context, "receivers", receiverDescriptor.type, receiverAnnotation)
+                        }
+                        continue
+                    }
+
                     descriptor is FieldDescriptor -> "fields" to descriptor.correspondingProperty.type
                     descriptor is ValueParameterDescriptor -> "parameters" to descriptor.type
                     descriptor is VariableDescriptor -> "variables" to descriptor.type
@@ -47,8 +56,14 @@ object MultiFieldValueClassAnnotationsChecker : DeclarationChecker {
             report(context, hint, type, annotationDecl)
         }
 
-        if (descriptor is FunctionDescriptor && declaration is KtFunction) {
+        if (descriptor is CallableDescriptor && declaration is KtDeclarationWithBody) {
             descriptor.valueParameters.zip(declaration.valueParameters) { desc, decl -> check(decl, desc, context) }
+            if (descriptor.extensionReceiverParameter != null && declaration is KtCallableDeclaration && declaration.receiverTypeReference != null) {
+                val receiverType = descriptor.extensionReceiverParameter!!.type
+                for (annotation in declaration.receiverTypeReference!!.annotations) {
+                    report(context, "contexts", receiverType, annotation)
+                }
+            }
         }
     }
 }
