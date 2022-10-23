@@ -114,7 +114,8 @@ class Fir2IrDeclarationStorage(
         return irFunction.valueParameters.size == firFunction.valueParameters.size &&
                 irFunction.valueParameters.zip(firFunction.valueParameters).all { (irParameter, firParameter) ->
                     val irType = irParameter.type
-                    val firType = firParameter.returnTypeRef.coneType
+                    // TODO: workaround for MPP (it should be coneType)
+                    val firType = firParameter.returnTypeRef.coneTypeSafe<ConeKotlinType>()
                     if (irType is IrSimpleType) {
                         when (val irClassifierSymbol = irType.classifier) {
                             is IrTypeParameterSymbol -> {
